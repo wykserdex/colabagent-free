@@ -1,0 +1,4 @@
+textual
+pydantic
+pydantic-settings
+requests

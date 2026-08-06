@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+runtime/
+.git/
+.env
+*.egg-info/
+tests/
+# твои debug-скрипты (adsad.py, test.py и т.д.) прямо в src/ — не нужны в образе,
+# сама библиотека лежит в src/code_agent/ и этим правилом не затрагивается
+src/*.py
+src/*.txt
