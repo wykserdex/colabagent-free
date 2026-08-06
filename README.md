@@ -33,6 +33,6 @@ No large models are loaded locally – any machine with Python 3.11+ will do.
 Clone the repository and install the package:
 
 ```bash
-git clone https://github.com/sevensidee/colabagent-free.git
+git clone https://github.com/wykserdex/colabagent-free.git
 cd colabagent-free
 pip install -e .
