@@ -132,3 +132,42 @@ def test_review_risk_action_requires_approval(tmp_path):
     orchestrator.run(state)
 
     assert not (tmp_path / "should_not_exist.py").exists()
+
+
+def test_policy_engine_denies_forbidden_path_before_approval_prompt(tmp_path):
+    """PolicyEngine (policy/policy_engine.py) раньше нигде не вызывался — orchestrator
+    гейтил действия только через tool.default_risk (REVIEW -> approval prompt).
+    path_guard.py и раньше блокировал запись в .env на этапе execute(), так что
+    сам файл никогда не появлялся — но пользователя всё равно дёргали за
+    подтверждением записи секретного файла, хотя это заведомо провальное
+    действие. Проверяем именно это: ask_callback НЕ должен вызываться вообще,
+    т.к. PolicyEngine обязан отклонить (.env) ДО подготовки approval-промпта."""
+    from code_agent.state import Phase
+    registry, dispatcher, _ = _setup(tmp_path)
+
+    calls: list[str] = []
+
+    def ask_callback(prepared):
+        calls.append(prepared.tool_name)
+        return True  # даже если бы юзер согласился — не должно до этого дойти
+
+    approval = ApprovalManager(mode="ask", ask_callback=ask_callback)
+
+    planner = _RecordingPlanner([
+        AgentAction(
+            type="tool_call", tool="filesystem.write_file",
+            arguments={"path": ".env", "content": "AGENT_GROQ_API_KEY=leaked"}, reason="тест",
+        ),
+        AgentAction(type="finish", summary="готово"),
+    ])
+    orchestrator = Orchestrator(
+        planner=planner, fallback_planner=planner, dispatcher=dispatcher,
+        registry=registry, approval=approval,
+        runtime_dir=str(tmp_path / "runtime"),
+    )
+    state = RunState(goal="цель", project_root=str(tmp_path), max_steps=10)
+    state.phase = Phase.IMPLEMENTATION
+    orchestrator.run(state)
+
+    assert calls == []  # approval prompt не должен был вызваться вообще
+    assert not (tmp_path / ".env").exists()

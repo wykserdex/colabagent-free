@@ -5,6 +5,7 @@ from enum import Enum
 
 from code_agent.models import AgentAction
 from code_agent.planners.base import Planner
+from code_agent.policy.policy_engine import PolicyEngine, ActionStatus
 from code_agent.prompts import format_history
 from code_agent.state import RunState, Phase
 from code_agent.tools.dispatcher import ToolDispatcher
@@ -36,6 +37,11 @@ class Orchestrator:
         self.runtime_dir = runtime_dir
         self.approval = approval
         self.mode = mode
+        # PolicyEngine раньше существовал отдельно (policy/policy_engine.py) и
+        # никогда не вызывался — весь gating шёл только через tool.get_risk().
+        # AgentMode ("autonomous"/"supervised"/"review") специально совпадает
+        # по значениям с режимами PolicyEngine, так что маппинг тривиальный.
+        self.policy_engine = PolicyEngine(mode=self.mode.value)
     
     def run(self, state: RunState, on_event: Optional[EventCallback] = None, incoming_messages=None) -> RunState:
         def emit(event: dict) -> None:
@@ -292,12 +298,26 @@ class Orchestrator:
                 return
 
             from code_agent.models import RiskLevel
-            if prepared.risk == RiskLevel.FORBIDDEN:
-                state.add_feedback(f"Действие {action.tool} запрещено safety-политикой")
-                emit({"type": "step_result", "success": False, "error": "forbidden"})
+
+            # Два независимых слоя: tool-level risk (SAFE/REVIEW/FORBIDDEN,
+            # захардкожен в каждом Tool.default_risk) и PolicyEngine
+            # (запрещённые пути, точная карта tool -> action_key, режимы).
+            # Берём более строгий результат из двух.
+            policy_decision = self.policy_engine.check_action(action.tool, action.arguments or {})
+
+            is_forbidden = prepared.risk == RiskLevel.FORBIDDEN or policy_decision.status == ActionStatus.DENY
+            if is_forbidden:
+                reason = (
+                    policy_decision.reason
+                    if policy_decision.status == ActionStatus.DENY
+                    else "запрещено safety-политикой"
+                )
+                state.add_feedback(f"Действие {action.tool} запрещено: {reason}")
+                emit({"type": "step_result", "success": False, "error": "forbidden", "reason": reason})
                 return
 
-            if prepared.risk == RiskLevel.REVIEW:
+            needs_approval = prepared.risk == RiskLevel.REVIEW or policy_decision.status == ActionStatus.REQUEST_APPROVAL
+            if needs_approval:
                 if self.approval is None:
                     state.add_feedback(f"{action.tool} требует подтверждения, но approval не настроен")
                     emit({"type": "step_result", "success": False, "error": "approval_not_configured"})
