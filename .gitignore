@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+ENV/
+env/
+
+# Агент
+runtime/
+.agent_backups/
+*.log
+*.tmp
+
+# Конфиги
+.env
+.idea/
+.vscode/
+
+# Системные
+.DS_Store
+Thumbs.db
