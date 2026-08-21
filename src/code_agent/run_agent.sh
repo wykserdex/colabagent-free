@@ -4,7 +4,7 @@
 # Code Agent Runner — запускает агента в Docker
 # ============================================
 
-set -e
+set -euo pipefail
 
 # Цвета для красоты
 RED='\033[0;31m'
@@ -16,9 +16,12 @@ NC='\033[0m' # No Color
 echo -e "${BLUE}🐳 Code Agent Docker Runner${NC}"
 echo "========================================"
 
-# Путь к проекту
-AGENT_PATH="/home/kali/Desktop/code_agent (3)"
-cd "$AGENT_PATH"
+# Корень репозитория вычисляется от расположения скрипта — раньше здесь был
+# зашит абсолютный путь с чужой машины (/home/kali/Desktop/...), из-за чего
+# скрипт падал у всех остальных на первой же строке.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+cd "$REPO_ROOT"
 
 # Проверяем, собран ли образ
 if ! docker image inspect code-agent:latest &>/dev/null; then
@@ -28,7 +31,7 @@ if ! docker image inspect code-agent:latest &>/dev/null; then
 fi
 
 # Проверяем аргументы
-if [ -z "$1" ]; then
+if [ $# -lt 1 ]; then
     echo -e "${YELLOW}⚠️  Не указана папка проекта${NC}"
     echo -e "Использование: ./run_agent.sh <путь_к_папке>"
     echo -e "Пример: ./run_agent.sh ~/projects/my_game"
@@ -36,15 +39,34 @@ if [ -z "$1" ]; then
 fi
 
 PROJECT_PATH="$1"
+shift
+mkdir -p "$PROJECT_PATH"
 PROJECT_PATH=$(realpath "$PROJECT_PATH")
 
-# Создаем папку если её нет
-mkdir -p "$PROJECT_PATH"
+# Подхватываем .env из корня репозитория, если он есть, — иначе агент уедет
+# в контейнер без URL туннеля и молча получит пустые ответы.
+if [ -f "$REPO_ROOT/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$REPO_ROOT/.env"
+    set +a
+fi
 
-# Проверяем URL
+: "${AGENT_COLAB_URL:=}"
+: "${AGENT_COLAB_TOKEN:=}"
+: "${AGENT_GROQ_API_KEY:=}"
+
 if [ -z "$AGENT_COLAB_URL" ]; then
-    echo -e "${YELLOW}⚠️  AGENT_COLAB_URL не задан, использую дефолтный...${NC}"
-    AGENT_COLAB_URL=""
+    echo -e "${RED}❌ AGENT_COLAB_URL не задан${NC}"
+    echo -e "Запусти серверную ячейку (colab/server_cell.txt) и впиши в .env:"
+    echo -e "  AGENT_COLAB_URL=https://<туннель>.trycloudflare.com"
+    echo -e "  AGENT_COLAB_TOKEN=<токен из вывода ячейки>"
+    echo -e "Напоминание: адрес меняется при каждом перезапуске Colab-ячейки."
+    exit 1
+fi
+
+if [ -z "$AGENT_COLAB_TOKEN" ]; then
+    echo -e "${YELLOW}⚠️  AGENT_COLAB_TOKEN пуст — сервер ответит 401, если ячейка требует токен${NC}"
 fi
 
 echo -e "${BLUE}📂 Проект: ${PROJECT_PATH}${NC}"
@@ -52,12 +74,13 @@ echo -e "${BLUE}🔗 URL: ${AGENT_COLAB_URL}${NC}"
 echo -e "${GREEN}🚀 Запускаю агента...${NC}"
 echo "========================================"
 
-# Запускаем контейнер
+# Запускаем контейнер. Токены пробрасываются из окружения, а не затираются
+# пустыми строками, как было раньше.
 docker run -it \
     --rm \
     --name code-agent \
     -v "$PROJECT_PATH:/workspace" \
     -e AGENT_COLAB_URL="$AGENT_COLAB_URL" \
-    -e AGENT_COLAB_TOKEN="" \
-    -e AGENT_GROQ_API_KEY="" \
-    code-agent
+    -e AGENT_COLAB_TOKEN="$AGENT_COLAB_TOKEN" \
+    -e AGENT_GROQ_API_KEY="$AGENT_GROQ_API_KEY" \
+    code-agent "$@"
